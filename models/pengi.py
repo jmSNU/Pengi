@@ -113,6 +113,79 @@ class TextEncoder(nn.Module):
         
         projected_vec = self.projection(out)
         return projected_vec
+    
+class MSS(nn.Module):
+    def __init__(self,
+                # audio
+                audioenc_name: str,
+                sample_rate: int, 
+                window_size: int, 
+                hop_size: int, 
+                mel_bins: int, 
+                fmin: int, 
+                fmax: int, 
+                classes_num: int, 
+                out_emb: int, 
+                specaug: bool, 
+                mixup: bool,
+                # text encoder
+                use_text_encoder: bool,
+                text_encoder: str,
+                text_encoder_embed_dim: int,
+                freeze_text_encoder_weights: bool,
+                # text decoder
+                text_decoder: str,
+                prefix_length: int,
+                clip_length: int,
+                prefix_size: int,
+                num_layers: int,
+                normalize_prefix: bool,
+                mapping_type: str,
+                freeze_text_decoder_weights: bool,
+                embedding_dim : int,
+                duration : int,
+                # common
+                d_proj: int,
+                use_pretrained_audioencoder: bool,
+                freeze_audio_encoder_weights: bool,
+                use_precomputed_melspec: bool = False,
+                pretrained_audioencoder_path: str = None,
+                ):
+        super().__init__()
+        
+        self.audio_encoder = AudioEncoder(
+            audioenc_name, out_emb, d_proj,
+            sample_rate, window_size, hop_size, mel_bins, fmin, fmax, classes_num, 
+            specaug, mixup, use_pretrained_audioencoder, freeze_audio_encoder_weights,
+            use_precomputed_melspec, pretrained_audioencoder_path)
+
+        self.use_text_encoder = use_text_encoder
+        if self.use_text_encoder:
+            self.caption_encoder = TextEncoder(
+                d_proj, 
+                text_encoder, text_encoder_embed_dim,
+                freeze_text_encoder_weights
+            )
+
+        self.decoder = get_decoder('CNN')(
+            prefix_length, clip_length, prefix_size,
+            num_layers, normalize_prefix, mapping_type, freeze_text_decoder_weights,
+            use_text_encoder, embedding_dim, duration
+        )
+
+    def forward(self, audio, texts_enc, texts_dec):
+        audio_embed, _ = self.audio_encoder(audio)
+        assert self.use_text_encoder
+        caption_embed = self.caption_encoder(texts_enc)
+        out = self.decoder(audio_embed, caption_embed, texts_dec)
+        return out
+    
+    def generate_prefix_inference(self, audio, texts_enc):
+        audio_embed, _ = self.audio_encoder(audio)
+        assert self.use_text_encoder
+        caption_embed = self.caption_encoder(texts_enc)
+        prefix = self.decoder.generate_prefix_inference(audio_embed, caption_embed)
+        return prefix
 
 class PENGI(nn.Module):
     def __init__(self,
