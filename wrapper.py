@@ -13,6 +13,9 @@ import torchaudio.transforms as T
 import collections
 import random
 
+class MSSWrapper():
+    pass
+
 class PengiWrapper():
     """
     A class for interfacing Pengi model.
