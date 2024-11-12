@@ -10,6 +10,8 @@ from typing import Tuple, Optional, Union
 def get_decoder(name: str):
     if name == "Decoder":
         return DecoderModel
+    elif name == "CNN":
+        return CNNDecoderModel
     else:
         raise Exception('The decoder model {} is incorrect or not supported'.format(name))
 
@@ -166,6 +168,133 @@ class TransformerMapperSeq(nn.Module):
         prefix = torch.cat((x, prefix), dim=1)
         out = self.transformer(prefix)[:, self.clip_length:]
         return out
+    
+class DeConvLayer(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, kernel_size: int = 4, stride: int = 2, padding: int = 1, activation: str = 'relu'):
+        super(DeConvLayer, self).__init__()
+        
+        # Transposed Convolution Layer
+        self.deconv = nn.ConvTranspose1d(in_channels, out_channels, kernel_size, stride, padding)
+        
+        # Batch Normalization
+        self.batch_norm = nn.BatchNorm1d(out_channels)
+        
+        # Activation Function
+        if activation.lower() == 'relu':
+            self.activation = nn.ReLU()
+        elif activation.lower() == 'leakyrelu':
+            self.activation = nn.LeakyReLU(0.2)
+        elif activation.lower() == 'tanh':
+            self.activation = nn.Tanh()
+        elif activation.lower() == 'sigmoid':
+            self.activation = nn.Sigmoid()
+        else:
+            raise ValueError(f"Unsupported activation function: {activation}")
+
+    def forward(self, x: torch.Tensor):
+        x = self.deconv(x)
+        x = self.batch_norm(x)
+        x = self.activation(x)
+        return x
+    
+class CNNDecoder(nn.Module):
+    def __init__(self, input_dim: int, latent_length: int, target_length: int):
+        super(CNNDecoder, self).__init__()
+        self.latent_length = latent_length
+        self.target_length = target_length
+
+        self.shared_layers = nn.Sequential(
+            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu')
+        )
+
+        self.head1 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
+        self.head2 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
+        self.head3 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
+        self.head4 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
+
+    def forward(self, x: torch.Tensor):
+        """
+        x: (batch_size, input_dim, latent_length)
+        """
+        if x.size(2) < self.target_length:
+            x = nn.functional.interpolate(x, size=self.target_length, mode='linear', align_corners=True)
+
+        x = self.shared_layers(x)
+        output1 = self.head1(x)
+        output2 = self.head2(x)
+        output3 = self.head3(x)
+        output4 = self.head4(x)
+
+        outputs = torch.cat([output1, output2, output3, output4], dim=1)
+        return outputs  # (batch_size, 4, target_length)
+
+    
+class CNNDecoderModel(nn.Module):
+    def __init__(self, prefix_length: int, prefix_size: int = 512, clip_length: Optional[int] = None,
+                 num_layers: int = 8, normalize_prefix: bool = True, mapping_type: str = None,
+                 use_text_encoder: bool = True, input_dim: int = 512, target_length: int = 1024):
+        super(CNNDecoderModel, self).__init__()
+        self.use_text_encoder = use_text_encoder
+        self.prefix_length = prefix_length
+        self.normalize_prefix = normalize_prefix
+        self.input_dim = input_dim
+
+        # Projection layers (MLP or TransformerMapper)
+        if mapping_type == 'mlp':
+            self.audio_project = MLP((prefix_size, (input_dim * prefix_length) // 2, input_dim * prefix_length))
+            if self.use_text_encoder:
+                self.text_project = MLP((prefix_size, (input_dim * prefix_length) // 2, input_dim * prefix_length))
+        else:
+            self.audio_project = TransformerMapper(prefix_size, input_dim, prefix_length, clip_length, int(num_layers/2))
+            if self.use_text_encoder:
+                self.text_project = TransformerMapper(prefix_size, input_dim, prefix_length, clip_length, int(num_layers/2))
+            else:
+                self.text_project = TransformerMapperSeq(prefix_size, input_dim, prefix_length, clip_length, int(num_layers/2))
+        self.cnn_decoder = CNNDecoder(input_dim, prefix_length, target_length)
+
+    def get_dummy_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        return torch.zeros(batch_size, self.prefix_length, dtype=torch.int64, device=device)
+    
+    def generate_prefix_inference(self, daudio, dtext):
+        # normalize prefix (audio embedding)
+        if self.normalize_prefix:
+            daudio = daudio / daudio.norm(2, -1).reshape(-1,1)
+            if self.use_text_encoder:
+                dtext = dtext / dtext.norm(2, -1).reshape(-1,1)
+
+        audio_projections = self.audio_project(daudio).contiguous().view(-1, self.prefix_length, self.input_dim)
+        if self.use_text_encoder:
+            text_projections = self.text_project(dtext).contiguous().view(-1, self.prefix_length, self.input_dim)
+            embedding_cat = torch.cat((audio_projections, text_projections), dim=1)
+        else:
+            text_projections = self.text_project(dtext).contiguous().view(-1, self.prefix_length, self.input_dim)
+            embedding_cat = torch.cat((audio_projections, text_projections), dim=1)
+        return embedding_cat
+    
+    def forward(self, daudio: torch.Tensor, dtext: torch.Tensor):
+        """
+        daudio: (batch_size, prefix_size)
+        dtext: (batch_size, prefix_size)
+        """
+        if self.normalize_prefix:
+            daudio = daudio / daudio.norm(2, -1).reshape(-1, 1)
+            if self.use_text_encoder:
+                dtext = dtext / dtext.norm(2, -1).reshape(-1, 1)
+
+        audio_projections = self.audio_project(daudio).contiguous().view(-1, self.prefix_length, self.input_dim)
+        if self.use_text_encoder:
+            text_projections = self.text_project(dtext).contiguous().view(-1, self.prefix_length, self.input_dim)
+            latent = torch.cat((audio_projections, text_projections), dim=1)
+        else:
+            latent = audio_projections
+
+        decoded_output = self.cnn_decoder(latent.permute(0, 2, 1))  # (batch_size, input_dim, latent_length)
+
+        return decoded_output  # (batch_size, 4, target_length)
+        
+
 
 class DecoderModel(nn.Module):
     def __init__(self, text_decoder: str, prefix_length: int, clip_length: Optional[int] = None, prefix_size: int = 512,
