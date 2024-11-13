@@ -167,9 +167,15 @@ class MSS(nn.Module):
             )
 
         self.decoder = get_decoder('CNN')(
-            prefix_length, clip_length, prefix_size,
-            num_layers, normalize_prefix, mapping_type, freeze_text_decoder_weights,
-            use_text_encoder, embedding_dim, duration
+            prefix_length=prefix_length, 
+            clip_length=clip_length, 
+            prefix_size=prefix_size,
+            num_layers=num_layers, 
+            normalize_prefix=normalize_prefix, 
+            mapping_type=mapping_type,
+            use_text_encoder=use_text_encoder, 
+            input_dim=embedding_dim, 
+            target_length=duration * sample_rate
         )
 
     def forward(self, audio, texts_enc):
