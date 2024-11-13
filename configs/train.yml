@@ -1,0 +1,2 @@
+device : "cuda0"
+learning_rate : "0.001"
