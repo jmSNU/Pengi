@@ -20,7 +20,7 @@ use_pretrained_audioencoder: False
 freeze_audio_encoder_weights: False
 
 # CLAP PROJECTION SPACE CONFIG 
-d_proj: 1024
+d_proj: 1024 # prefix_dim
 
 # DATASET CONFIGS
 dataset_config: 
