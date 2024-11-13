@@ -1,6 +1,6 @@
 import numpy as np
 from transformers import AutoTokenizer
-from models.pengi import PENGI
+from models.pengi import PENGI, MSS
 import os
 import torch
 from collections import OrderedDict
@@ -14,12 +14,6 @@ import collections
 import random
 
 class MSSWrapper():
-    pass
-
-class PengiWrapper():
-    """
-    A class for interfacing Pengi model.
-    """
     def __init__(self, config, use_cuda=False):
         self.file_path = os.path.realpath(__file__)
         if config == "base":
@@ -28,6 +22,280 @@ class PengiWrapper():
         elif config == "base_no_text_enc":
             config_path = 'base_no_text_enc.yml'
             model_path = 'base_no_text_enc.pth'
+        else:
+            raise ValueError(f"Config type {config} not supported")
+
+        self.model_path = files('configs').joinpath(model_path)
+        self.config_path = files('configs').joinpath(config_path)
+        self.use_cuda = use_cuda
+        self.model, self.enc_tokenizer, self.dec_tokenizer, self.args = self.get_model_and_tokenizer(config_path=self.config_path)
+        self.model.eval()
+
+    def read_config_as_args(self,config_path):
+        return_dict = {}
+        with open(config_path, "r") as f:
+            yml_config = yaml.load(f, Loader=yaml.FullLoader)
+        for k, v in yml_config.items():
+            return_dict[k] = v
+        return argparse.Namespace(**return_dict)
+
+    def get_model_and_tokenizer(self, config_path):
+        r"""Load Pengi with args from config file"""
+        args = self.read_config_as_args(config_path)
+        args.prefix_dim = args.d_proj
+        args.total_prefix_length = 2*args.prefix_length
+        if not args.use_text_model:
+            args.text_model = args.text_decoder
+
+        # Copy relevant configs from dataset_config
+        args.sampling_rate = args.dataset_config['sampling_rate']
+        args.duration = args.dataset_config['duration']
+        model = MSS(
+            # audio
+            audioenc_name = args.audioenc_name,
+            sample_rate = args.sampling_rate,
+            window_size = args.window_size,
+            hop_size = args.hop_size,
+            mel_bins = args.mel_bins,
+            fmin = args.fmin,
+            fmax = args.fmax,
+            classes_num = None,
+            out_emb = args.out_emb,
+            specaug = args.specaug,
+            mixup = args.mixup,
+            # text encoder
+            use_text_encoder = args.use_text_model,
+            text_encoder = args.text_model,
+            text_encoder_embed_dim = args.transformer_embed_dim,
+            freeze_text_encoder_weights = args.freeze_text_encoder_weights,
+            # text decoder
+            prefix_length = args.prefix_length,
+            clip_length = args.prefix_length_clip,
+            prefix_size = args.prefix_dim,
+            num_layers = args.num_layers,
+            normalize_prefix = args.normalize_prefix,
+            mapping_type = args.mapping_type,
+            freeze_text_decoder_weights = args.freeze_gpt_weights,
+            embedding_dim=args.cnn_embed_dim,
+            duration = args.duration,
+            # common
+            d_proj = args.d_proj,
+            use_pretrained_audioencoder = args.use_pretrained_audioencoder,
+            freeze_audio_encoder_weights= args.freeze_audio_encoder_weights,
+            use_precomputed_melspec = False,
+            pretrained_audioencoder_path = None,
+        )
+        model.enc_text_len = args.dataset_config['enc_text_len']
+        # model.dec_text_len = args.dataset_config['dec_text_len']
+        model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))['model']
+        try:
+            model.load_state_dict(model_state_dict)
+        except:
+            new_state_dict = OrderedDict()
+            for k, v in model_state_dict.items():
+                name = k[7:] # remove 'module.'
+                new_state_dict[name] = v
+            model.load_state_dict(new_state_dict)
+
+        enc_tokenizer = AutoTokenizer.from_pretrained(args.text_model)
+        if 'gpt' in args.text_model:
+            enc_tokenizer.add_special_tokens({'pad_token': '!'})
+
+        if self.use_cuda and torch.cuda.is_available():
+            model = model.cuda()
+        
+        return model, enc_tokenizer, args
+
+    def default_collate(self, batch):
+        r"""Puts each data field into a tensor with outer dimension batch size"""
+        elem = batch[0]
+        elem_type = type(elem)
+        if isinstance(elem, torch.Tensor):
+            out = None
+            if torch.utils.data.get_worker_info() is not None:
+                # If we're in a background process, concatenate directly into a
+                # shared memory tensor to avoid an extra copy
+                numel = sum([x.numel() for x in batch])
+                storage = elem.storage()._new_shared(numel)
+                out = elem.new(storage)
+            return torch.stack(batch, 0, out=out)
+        elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
+                and elem_type.__name__ != 'string_':
+            if elem_type.__name__ == 'ndarray' or elem_type.__name__ == 'memmap':
+                # array of string classes and object
+                if self.np_str_obj_array_pattern.search(elem.dtype.str) is not None:
+                    raise TypeError(
+                        self.default_collate_err_msg_format.format(elem.dtype))
+
+                return self.default_collate([torch.as_tensor(b) for b in batch])
+            elif elem.shape == ():  # scalars
+                return torch.as_tensor(batch)
+        elif isinstance(elem, float):
+            return torch.tensor(batch, dtype=torch.float64)
+        elif isinstance(elem, int):
+            return torch.tensor(batch)
+        elif isinstance(elem, collections.abc.Mapping):
+            return {key: self.default_collate([d[key] for d in batch]) for key in elem}
+        elif isinstance(elem, tuple) and hasattr(elem, '_fields'):  # namedtuple
+            return elem_type(*(self.default_collate(samples) for samples in zip(*batch)))
+        elif isinstance(elem, collections.abc.Sequence):
+            # check to make sure that the elements in batch have consistent size
+            it = iter(batch)
+            elem_size = len(next(it))
+            if not all(len(elem) == elem_size for elem in it):
+                raise RuntimeError(
+                    'each element in list of batch should be of equal size')
+            transposed = zip(*batch)
+            return [self.default_collate(samples) for samples in transposed]
+
+        raise TypeError(self.default_collate_err_msg_format.format(elem_type))
+
+    def load_audio_into_tensor(self, audio_path, audio_duration, resample=True):
+        r"""Loads audio file and returns raw audio."""
+        # Randomly sample a segment of audio_duration from the clip or pad to match duration
+        audio_time_series, sample_rate = torchaudio.load(audio_path)
+        resample_rate = self.args.sampling_rate
+        if resample and resample_rate != sample_rate:
+            resampler = T.Resample(sample_rate, resample_rate)
+            audio_time_series = resampler(audio_time_series)
+        audio_time_series = audio_time_series.reshape(-1)
+        sample_rate = resample_rate
+
+        # audio_time_series is shorter than predefined audio duration,
+        # so audio_time_series is extended
+        if audio_duration*sample_rate >= audio_time_series.shape[0]:
+            repeat_factor = int(np.ceil((audio_duration*sample_rate) /
+                                        audio_time_series.shape[0]))
+            # Repeat audio_time_series by repeat_factor to match audio_duration
+            audio_time_series = audio_time_series.repeat(repeat_factor)
+            # remove excess part of audio_time_series
+            audio_time_series = audio_time_series[0:audio_duration*sample_rate]
+        else:
+            # audio_time_series is longer than predefined audio duration,
+            # so audio_time_series is trimmed
+            start_index = random.randrange(
+                audio_time_series.shape[0] - audio_duration*sample_rate)
+            audio_time_series = audio_time_series[start_index:start_index +
+                                                  audio_duration*sample_rate]
+        return torch.FloatTensor(audio_time_series)
+
+    def preprocess_audio(self, audio_files, resample):
+        r"""Load list of audio files and return raw audio"""
+        audio_tensors = []
+        for audio_file in audio_files:
+            audio_tensor = self.load_audio_into_tensor(
+                audio_file, self.args.duration, resample)
+            audio_tensor = audio_tensor.reshape(
+                1, -1).cuda() if self.use_cuda and torch.cuda.is_available() else audio_tensor.reshape(1, -1)
+            audio_tensors.append(audio_tensor)
+        return self.default_collate(audio_tensors)
+
+    def preprocess_text(self, prompts, enc_tok, add_text):
+        r"""Load list of prompts and return tokenized text"""
+        tokenized_texts = []
+        tokenizer = self.enc_tokenizer if enc_tok else self.dec_tokenizer
+        for ttext in prompts:
+            if add_text:
+                tok = self.dec_tokenizer.encode_plus(text=ttext, add_special_tokens=True, return_tensors="pt")
+            else:
+                if enc_tok:
+                    ttext = ttext + ' <|endoftext|>' if 'gpt' in self.args.text_model else ttext
+                tok = tokenizer.encode_plus(
+                            text=ttext, add_special_tokens=True,\
+                            max_length=self.model.enc_text_len, 
+                            pad_to_max_length=True, return_tensors="pt")
+                
+            for key in tok.keys():
+                tok[key] = tok[key].reshape(-1).cuda() if self.use_cuda and torch.cuda.is_available() else tok[key].reshape(-1)
+            tokenized_texts.append(tok)
+        return self.default_collate(tokenized_texts)
+    
+    def _get_audio_embeddings(self, preprocessed_audio):
+        r"""Load preprocessed audio and return a audio embeddings"""
+        with torch.no_grad():
+            preprocessed_audio = preprocessed_audio.reshape(
+                preprocessed_audio.shape[0], preprocessed_audio.shape[2])
+            audio_embeddings = self.model.audio_encoder(preprocessed_audio)[0]
+            if self.args.normalize_prefix:
+                audio_embeddings = audio_embeddings / audio_embeddings.norm(2, -1).reshape(-1,1)
+        return audio_embeddings
+
+    def _get_audio_prefix(self, audio_embeddings):
+        r"""Produces audio embedding which is fed to LM"""
+        with torch.no_grad():
+            audio_prefix = self.model.caption_decoder.audio_project(audio_embeddings).contiguous().view(-1, self.model.caption_decoder.prefix_length, self.model.caption_decoder.gpt_embedding_size)
+        return audio_prefix
+
+    def _get_prompts_embeddings(self, preprocessed_prompts):
+        r"""Load preprocessed prompts and return a prompt embeddings"""
+        with torch.no_grad():
+            if self.args.use_text_model:
+                prompts_embed = self.model.caption_encoder(preprocessed_prompts)
+            else:
+                prompts_embed = self.model.caption_decoder.gpt.transformer.wte(preprocessed_prompts['input_ids'])
+        return prompts_embed
+    
+    def _get_prompts_prefix(self, prompts_embed):
+        r"""Produces prompt prefix which is fed to LM"""
+        with torch.no_grad():
+            prompts_prefix = self.model.caption_decoder.text_project(prompts_embed).contiguous().view(-1, self.model.caption_decoder.prefix_length, self.model.caption_decoder.gpt_embedding_size)
+        return prompts_prefix
+    
+    def _get_decoder_embeddings(self, preprocessed_text):
+        r"""Load additional text and return a additional text embeddings"""
+        with torch.no_grad():
+            decoder_embed = self.model.caption_decoder.gpt.transformer.wte(preprocessed_text['input_ids'])
+        return decoder_embed
+    
+    def get_audio_embeddings(self, audio_paths, resample=True):
+        r"""Load list of audio files and return audio prefix and audio embeddings"""
+        preprocessed_audio = self.preprocess_audio(audio_paths, resample)
+        audio_embeddings = self._get_audio_embeddings(preprocessed_audio)
+        audio_prefix = self._get_audio_prefix(audio_embeddings)
+        return audio_prefix, audio_embeddings
+
+    def get_prompt_embeddings(self, prompts):
+        r"""Load list of text prompts and return prompt prefix and prompt embeddings"""
+        preprocessed_text = self.preprocess_text(prompts, enc_tok=True, add_text=False)
+        prompt_embeddings = self._get_prompts_embeddings(preprocessed_text)
+        prompt_prefix = self._get_prompts_prefix(prompt_embeddings)
+        return prompt_prefix, prompt_embeddings
+
+    def get_decoder_embeddings(self, add_texts):
+        r"""Load additional text and return a additional text embeddings"""
+        preprocessed_text = self.preprocess_text(add_texts, enc_tok=False, add_text=True)
+        addtext_embeddings = self._get_decoder_embeddings(preprocessed_text)
+        return addtext_embeddings
+    
+    def predict(self, audio_paths, text_prompts, audio_resample=True):
+        if not isinstance(audio_paths, list):
+            raise ValueError(f"The audio_paths is expected in list")
+        if not isinstance(text_prompts, list):
+            raise ValueError(f"The text_prompts is expected in list")
+        length = len(audio_paths)
+        if any(len(lst) != length for lst in text_prompts):
+            raise ValueError(f"The two inputs of audio, text should have same length")
+        
+        audio_prefix, _ = self.get_audio_embeddings(audio_paths, resample=audio_resample)
+        prompt_prefix, _ = self.get_prompt_embeddings(text_prompts)
+        
+        preds = []
+        for i in range(len(audio_paths)):
+            pred = self.model.decoder(audio_prefix[i], prompt_prefix[i])
+            preds.append(pred)
+        
+        return preds
+        
+
+class PengiWrapper():
+    """
+    A class for interfacing Pengi model.
+    """
+    def __init__(self, config, use_cuda=False):
+        self.file_path = os.path.realpath(__file__)
+        if config == "base":
+            config_path = 'base_mss.yml'
+            model_path = 'base.pth'
         else:
             raise ValueError(f"Config type {config} not supported")
 
