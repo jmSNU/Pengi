@@ -17,7 +17,7 @@ class MSSWrapper():
     def __init__(self, config, use_cuda=False):
         self.file_path = os.path.realpath(__file__)
         if config == "base":
-            config_path = 'base.yml'
+            config_path = 'base_mss.yml'
             model_path = 'base.pth'
         elif config == "base_no_text_enc":
             config_path = 'base_no_text_enc.yml'
@@ -25,10 +25,10 @@ class MSSWrapper():
         else:
             raise ValueError(f"Config type {config} not supported")
 
-        self.model_path = files('configs').joinpath(model_path)
+        self.model_path = files('checkpoint').joinpath(model_path)
         self.config_path = files('configs').joinpath(config_path)
         self.use_cuda = use_cuda
-        self.model, self.enc_tokenizer, self.dec_tokenizer, self.args = self.get_model_and_tokenizer(config_path=self.config_path)
+        self.model, self.enc_tokenizer, self.args = self.get_model_and_tokenizer(config_path=self.config_path)
         self.model.eval()
 
     def read_config_as_args(self,config_path):
@@ -88,14 +88,21 @@ class MSSWrapper():
         model.enc_text_len = args.dataset_config['enc_text_len']
         # model.dec_text_len = args.dataset_config['dec_text_len']
         model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))['model']
-        try:
-            model.load_state_dict(model_state_dict)
-        except:
-            new_state_dict = OrderedDict()
-            for k, v in model_state_dict.items():
-                name = k[7:] # remove 'module.'
-                new_state_dict[name] = v
-            model.load_state_dict(new_state_dict)
+
+        audio_encoder_state_dict = OrderedDict()
+        caption_encoder_state_dict = OrderedDict()
+        for k, v in model_state_dict.items():
+            if "decoder" not in k:
+                name = k
+                if "audio_encoder" in k :
+                    name = name[len("audio_encoder") + 1:]
+                    audio_encoder_state_dict[name] = v
+                else:
+                    name = name[len("cpation_encoder") + 1:]
+                    caption_encoder_state_dict[name] = v
+
+        model.audio_encoder.load_state_dict(audio_encoder_state_dict)
+        model.caption_encoder.load_state_dict(caption_encoder_state_dict)
 
         enc_tokenizer = AutoTokenizer.from_pretrained(args.text_model)
         if 'gpt' in args.text_model:
@@ -223,7 +230,7 @@ class MSSWrapper():
     def _get_audio_prefix(self, audio_embeddings):
         r"""Produces audio embedding which is fed to LM"""
         with torch.no_grad():
-            audio_prefix = self.model.caption_decoder.audio_project(audio_embeddings).contiguous().view(-1, self.model.caption_decoder.prefix_length, self.model.caption_decoder.gpt_embedding_size)
+            audio_prefix = self.model.decoder.audio_project(audio_embeddings).contiguous().view(-1, self.model.decoder.prefix_length, self.model.decoder.input_dim)
         return audio_prefix
 
     def _get_prompts_embeddings(self, preprocessed_prompts):
@@ -232,20 +239,14 @@ class MSSWrapper():
             if self.args.use_text_model:
                 prompts_embed = self.model.caption_encoder(preprocessed_prompts)
             else:
-                prompts_embed = self.model.caption_decoder.gpt.transformer.wte(preprocessed_prompts['input_ids'])
+                prompts_embed = self.model.decoder.gpt.transformer.wte(preprocessed_prompts['input_ids'])
         return prompts_embed
     
     def _get_prompts_prefix(self, prompts_embed):
         r"""Produces prompt prefix which is fed to LM"""
         with torch.no_grad():
-            prompts_prefix = self.model.caption_decoder.text_project(prompts_embed).contiguous().view(-1, self.model.caption_decoder.prefix_length, self.model.caption_decoder.gpt_embedding_size)
+            prompts_prefix = self.model.decoder.text_project(prompts_embed).contiguous().view(-1, self.model.decoder.prefix_length, self.model.decoder.input_dim)
         return prompts_prefix
-    
-    def _get_decoder_embeddings(self, preprocessed_text):
-        r"""Load additional text and return a additional text embeddings"""
-        with torch.no_grad():
-            decoder_embed = self.model.caption_decoder.gpt.transformer.wte(preprocessed_text['input_ids'])
-        return decoder_embed
     
     def get_audio_embeddings(self, audio_paths, resample=True):
         r"""Load list of audio files and return audio prefix and audio embeddings"""
@@ -260,12 +261,6 @@ class MSSWrapper():
         prompt_embeddings = self._get_prompts_embeddings(preprocessed_text)
         prompt_prefix = self._get_prompts_prefix(prompt_embeddings)
         return prompt_prefix, prompt_embeddings
-
-    def get_decoder_embeddings(self, add_texts):
-        r"""Load additional text and return a additional text embeddings"""
-        preprocessed_text = self.preprocess_text(add_texts, enc_tok=False, add_text=True)
-        addtext_embeddings = self._get_decoder_embeddings(preprocessed_text)
-        return addtext_embeddings
     
     def predict(self, audio_paths, text_prompts, audio_resample=True):
         if not isinstance(audio_paths, list):
@@ -273,15 +268,15 @@ class MSSWrapper():
         if not isinstance(text_prompts, list):
             raise ValueError(f"The text_prompts is expected in list")
         length = len(audio_paths)
-        if any(len(lst) != length for lst in text_prompts):
-            raise ValueError(f"The two inputs of audio, text should have same length")
+        if len(text_prompts) != length:
+            raise ValueError(f"The two inputs of audio and text should have same length")
         
-        audio_prefix, _ = self.get_audio_embeddings(audio_paths, resample=audio_resample)
-        prompt_prefix, _ = self.get_prompt_embeddings(text_prompts)
+        _, audio_embed = self.get_audio_embeddings(audio_paths, resample=audio_resample) # audio_embed.shape == (len(audio_paths), prefix_size)
+        _, text_embed = self.get_prompt_embeddings(text_prompts) # prompt_embd.shape == (len(prompts), prefix_size)
         
         preds = []
         for i in range(len(audio_paths)):
-            pred = self.model.decoder(audio_prefix[i], prompt_prefix[i])
+            pred = self.model.decoder(audio_embed[i], text_embed[i])
             preds.append(pred)
         
         return preds
@@ -294,7 +289,7 @@ class PengiWrapper():
     def __init__(self, config, use_cuda=False):
         self.file_path = os.path.realpath(__file__)
         if config == "base":
-            config_path = 'base_mss.yml'
+            config_path = 'base.yml'
             model_path = 'base.pth'
         else:
             raise ValueError(f"Config type {config} not supported")
