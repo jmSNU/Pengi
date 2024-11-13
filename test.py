@@ -1,28 +1,24 @@
-from wrapper import PengiWrapper as Pengi
+from wrapper import MSSWrapper 
 
-pengi = Pengi(config="base") #base or base_no_text_enc
-audio_file_paths = ["FILE_PATH_1", "FILE_PATH_2"]
-text_prompts = ["generate metadata", "generate metadata"]
+mss_wrapper = MSSWrapper(config="base") #base or base_no_text_enc
+audio_file_paths = ["dataset/mix0.wav", "dataset/mix1.wav"]
+prompts = """
+    This track includes a podcast dialogue with ocassional sound effects
+"""
+text_prompts = [prompts]*len(audio_file_paths)
 add_texts = ["",""]
 
-generated_response = pengi.generate(
-                                    audio_paths=audio_file_paths,
-                                    text_prompts=text_prompts, 
-                                    add_texts=add_texts, 
-                                    max_len=30, 
-                                    beam_size=3, 
-                                    temperature=1.0, 
-                                    stop_token=' <|endoftext|>',
-                                    )
+audio_prefix, audio_embeddings = mss_wrapper.get_audio_embeddings(audio_paths=audio_file_paths)
+print(f"Audio embedding shape : {audio_embeddings.shape}")
 
-generated_summary = pengi.describe(
-                                    audio_paths=audio_file_paths,
-                                    max_len=30, 
-                                    beam_size=3,  
-                                    temperature=1.0,  
-                                    stop_token=' <|endoftext|>',
-                                    )
+text_prefix, text_embeddings = mss_wrapper.get_prompt_embeddings(prompts=text_prompts)
+print(f"Audio embedding shape : {text_embeddings.shape}")
 
-audio_prefix, audio_embeddings = pengi.get_audio_embeddings(audio_paths=audio_file_paths)
 
-text_prefix, text_embeddings = pengi.get_prompt_embeddings(prompts=text_prompts)
+output = mss_wrapper.predict(
+    audio_paths=audio_file_paths,
+    text_prompts=text_prompts,
+    audio_resample=True
+)
+
+print(f"Output shape : {output.shape}")
