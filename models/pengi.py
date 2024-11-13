@@ -134,7 +134,6 @@ class MSS(nn.Module):
                 text_encoder_embed_dim: int,
                 freeze_text_encoder_weights: bool,
                 # text decoder
-                text_decoder: str,
                 prefix_length: int,
                 clip_length: int,
                 prefix_size: int,
@@ -173,11 +172,11 @@ class MSS(nn.Module):
             use_text_encoder, embedding_dim, duration
         )
 
-    def forward(self, audio, texts_enc, texts_dec):
+    def forward(self, audio, texts_enc):
         audio_embed, _ = self.audio_encoder(audio)
         assert self.use_text_encoder
         caption_embed = self.caption_encoder(texts_enc)
-        out = self.decoder(audio_embed, caption_embed, texts_dec)
+        out = self.decoder(audio_embed, caption_embed)
         return out
     
     def generate_prefix_inference(self, audio, texts_enc):
