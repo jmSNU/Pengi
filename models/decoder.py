@@ -209,18 +209,28 @@ class CNNDecoder(nn.Module):
             DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu')
         )
 
-        self.head1 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
-        self.head2 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
-        self.head3 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
-        self.head4 = DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh')
+         # Separate heads for each output signal
+        self.head1 = nn.Sequential(
+            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            nn.AdaptiveAvgPool1d(target_length)
+        )
+        self.head2 = nn.Sequential(
+            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            nn.AdaptiveAvgPool1d(target_length)
+        )
+        self.head3 = nn.Sequential(
+            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            nn.AdaptiveAvgPool1d(target_length)
+        )
+        self.head4 = nn.Sequential(
+            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            nn.AdaptiveAvgPool1d(target_length)
+        )
 
     def forward(self, x: torch.Tensor):
         """
         x: (batch_size, input_dim, latent_length)
         """
-        if x.size(2) < self.target_length:
-            x = nn.functional.interpolate(x, size=self.target_length, mode='linear', align_corners=True)
-
         x = self.shared_layers(x)
         output1 = self.head1(x)
         output2 = self.head2(x)
@@ -275,8 +285,8 @@ class CNNDecoderModel(nn.Module):
     
     def forward(self, daudio: torch.Tensor, dtext: torch.Tensor):
         """
-        daudio: (batch_size, prefix_size)
-        dtext: (batch_size, prefix_size)
+        daudio : (batch_size, prefix_size)
+        dtext : (batch_size, prefix_size)
         """
         if self.normalize_prefix:
             daudio = daudio / daudio.norm(2, -1).reshape(-1, 1)
