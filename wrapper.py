@@ -13,19 +13,48 @@ import torchaudio.transforms as T
 import collections
 import random
 
+def get_latest_checkpoint(model_name):
+        base_path = f"./checkpoint/{model_name}"
+
+        if not os.path.exists(base_path):
+            raise FileNotFoundError(f"No checkpoint directory found for model: {model_name}")
+
+        checkpoint_dirs = sorted(
+            [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))],
+            reverse=True
+        )
+
+        if not checkpoint_dirs:
+            raise FileNotFoundError("No checkpoint directories found.")
+
+        latest_checkpoint_dir = os.path.join(base_path, checkpoint_dirs[0])
+
+        checkpoint_files = sorted(
+            [f for f in os.listdir(latest_checkpoint_dir) if f.startswith("model-epoch-")],
+            key=lambda x: int(x.split("-epoch-")[1].split(".")[0]),
+            reverse=True
+        )
+
+        if not checkpoint_files:
+            raise FileNotFoundError("No checkpoint files found in the latest directory.")
+
+        latest_checkpoint_path = os.path.join(latest_checkpoint_dir, checkpoint_files[0])
+
+        return latest_checkpoint_path
+
 class MSSWrapper():
     def __init__(self, config, use_cuda=False):
         self.file_path = os.path.realpath(__file__)
         if config == "base":
             config_path = 'base_mss.yml'
             model_path = 'base.pth'
-        elif config == "base_no_text_enc":
-            config_path = 'base_no_text_enc.yml'
-            model_path = 'base_no_text_enc.pth'
+        elif config == "demo":
+            config_path = "demo.yml"
+            model_path = get_latest_checkpoint("Pengi-MSS")
         else:
             raise ValueError(f"Config type {config} not supported")
 
-        self.model_path = files('checkpoint').joinpath(model_path)
+        self.model_path = model_path if config == "demo" else files('checkpoint').joinpath(model_path)
         self.config_path = files('configs').joinpath(config_path)
         self.use_cuda = use_cuda
         self.model, self.enc_tokenizer, self.args = self.get_model_and_tokenizer(config_path=self.config_path)
@@ -87,7 +116,10 @@ class MSSWrapper():
         )
         model.enc_text_len = args.dataset_config['enc_text_len']
         # model.dec_text_len = args.dataset_config['dec_text_len']
-        model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))['model']
+        try :
+            model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))['model']
+        except:
+            model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))
 
         audio_encoder_state_dict = OrderedDict()
         caption_encoder_state_dict = OrderedDict()
@@ -273,13 +305,13 @@ class MSSWrapper():
         if len(text_prompts) != length:
             raise ValueError(f"The two inputs of audio and text should have same length")
         
-        _, audio_embed = self.get_audio_embeddings(audio_paths, resample=audio_resample) # audio_embed.shape == (len(audio_paths), prefix_size)
-        _, text_embed = self.get_prompt_embeddings(text_prompts) # prompt_embd.shape == (len(prompts), prefix_size)
-        
-        preds = []
-        for i in range(len(audio_paths)):
-            pred = self.model.decoder(audio_embed[i], text_embed[i])
-            preds.append(pred)
+        text_encs = self.preprocess_text(text_prompts, enc_tok=True, add_text=False)
+        audio_samples = []
+        for audio_path in audio_paths:
+            audio_sample = self.load_audio_into_tensor(audio_path, self.args.duration, audio_resample).cuda() if self.use_cuda else self.load_audio_into_tensor(audio_path, self.args.duration, audio_resample)
+            audio_samples.append(audio_sample)
+        audio_samples_tensor = torch.stack(audio_samples, dim = 0)
+        preds = self.model(audio_samples_tensor, text_encs)
         
         return preds
         
