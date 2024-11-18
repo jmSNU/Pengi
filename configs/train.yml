@@ -1,2 +1,17 @@
-device : "cuda0"
-learning_rate : "0.001"
+model_name : "Pengi-MSS"
+device : "cuda:0"
+num_epochs : 3
+
+# Datasets Configuration
+dataset_dir : "./dataset"
+batch_size : 64
+
+# Optimizer Configuration
+learning_rate : 0.001
+weight_decay: 0.00001
+
+# Scheduler Configuration
+gradient_clipping : 0.1
+warmup_steps_ratio: 0.01
+grad_accum_steps: 1
+
