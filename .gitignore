@@ -2,3 +2,5 @@
 *.wav
 *.cpython-38.pyc
 /dataset/*
+/checkpoint/*
+/demo/*
