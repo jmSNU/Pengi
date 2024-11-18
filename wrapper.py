@@ -98,11 +98,13 @@ class MSSWrapper():
                     name = name[len("audio_encoder") + 1:]
                     audio_encoder_state_dict[name] = v
                 else:
-                    name = name[len("cpation_encoder") + 1:]
+                    name = name[len("caption_encoder") + 1:]
                     caption_encoder_state_dict[name] = v
 
         model.audio_encoder.load_state_dict(audio_encoder_state_dict)
         model.caption_encoder.load_state_dict(caption_encoder_state_dict)
+        for param in model.audio_encoder.parameters():
+            param.requires_grad = False
 
         enc_tokenizer = AutoTokenizer.from_pretrained(args.text_model)
         if 'gpt' in args.text_model:
