@@ -10,5 +10,5 @@ torchlibrosa==0.1.0
 transformers==4.28.1
 
 # MSS
-
 pandas
+tensorboard
