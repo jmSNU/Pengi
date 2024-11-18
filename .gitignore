@@ -1,3 +1,4 @@
 *.pth
 *.wav
 *.cpython-38.pyc
+/dataset/*
