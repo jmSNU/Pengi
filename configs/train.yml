@@ -1,6 +1,7 @@
 model_name : "Pengi-MSS"
 device : "cuda:0"
-num_epochs : 3
+num_epochs : 1000
+save_checkpoint_epoch: 100
 
 # Datasets Configuration
 dataset_dir : "./dataset"
