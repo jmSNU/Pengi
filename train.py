@@ -11,6 +11,7 @@ from models.dataset import MediaContentDataset
 from transformers import get_linear_schedule_with_warmup
 from prompts import *
 from datetime import datetime
+from torch.utils.tensorboard import SummaryWriter
 
 
 class MSSTrainer:
@@ -31,6 +32,8 @@ class MSSTrainer:
         self.preprocess_text = preprocess_text
         self.prompts = prompts
         self.save_dir_path = f"./checkpoint/{self.model_name}/{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+        self.writer = SummaryWriter(log_dir=self.save_dir_path)
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -65,6 +68,8 @@ class MSSTrainer:
     def train(self):
         self.model.train()
         print(f"Starting training for {self.num_epochs} epochs")
+
+        global_step = 0
         
         for epoch in range(self.num_epochs):
             epoch_losses = []
@@ -88,13 +93,21 @@ class MSSTrainer:
                 self.scheduler.step()
                 self.optimizer.zero_grad()
 
+                self.writer.add_scalar("Loss/train", loss.item(), global_step)
+                epoch_losses.append(loss.item())
+                global_step += 1
+
                 epoch_losses.append(loss.item())
                 bar.update(1)
                 bar.set_description(f"Epoch {epoch} loss: {sum(epoch_losses) / len(epoch_losses):.5f}")
 
-            if epoch % self.save_checkpoint_epoch:
+
+            if epoch % self.save_checkpoint_epoch == 0:
                 torch.save(self.model.state_dict(), os.path.join(self.save_dir_path, f"model-epoch-{epoch}.pt"))
                 print(f"\nEpoch[{epoch}] ended with loss: [{sum(epoch_losses) / len(epoch_losses):.5f}]")
+                self.writer.add_scalar("Loss/epoch", sum(epoch_losses) / len(epoch_losses), epoch)
+
+        self.writer.close()
 
 if __name__ == "__main__":
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
