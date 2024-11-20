@@ -11,8 +11,32 @@ from models.dataset import MediaContentDataset
 from transformers import get_linear_schedule_with_warmup
 from prompts import *
 from datetime import datetime
+from utils import *
 from torch.utils.tensorboard import SummaryWriter
+from torchlibrosa.stft import Spectrogram
 
+
+class SpectralL1Loss(nn.Module):
+    def __init__(self, n_fft = 512, hop_size = 256, win_size = 512):
+        super().__init__()
+        self.n_fft = n_fft
+        self.hop_length = hop_size
+        self.win_length = win_size
+        self.spectrogram_extractor = Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, 
+            win_length=self.win_length, window="hann", center=True, pad_mode="reflect", 
+            freeze_parameters=True).to(train_args.device)
+        
+        self.l1_loss = nn.L1Loss()
+
+    def forward(self, predicted, target):
+        loss = 0
+
+        for stem in range(4):
+            pred_spectrogram = self.spectrogram_extractor(predicted[:, stem, :])
+            target_spectrogram = self.spectrogram_extractor(target[:, stem, :])
+
+            loss += self.l1_loss(pred_spectrogram, target_spectrogram)
+        return loss/4
 
 class MSSTrainer:
     def __init__(self, model, preprocess_text, prompts, train_args):
@@ -63,27 +87,34 @@ class MSSTrainer:
             num_training_steps=total_training_steps,
         )
 
-        self.loss_fn = nn.L1Loss()
+        self.loss_fn = SpectralL1Loss(train_args.n_fft, train_args.hop_size, train_args.window_size)
 
     def train(self):
         self.model.train()
-        print(f"Starting training for {self.num_epochs} epochs")
+        print(f"[INFO] Starting training for {self.num_epochs} epochs")
 
         global_step = 0
+
+        os.makedirs(self.save_dir_path, exist_ok=True)
+        train_args_path = os.path.join(self.save_dir_path, "train_args.yml")
+        with open(train_args_path, "w") as f:
+            yaml.dump(vars(train_args), f)
+        print(f"[INFO] Training arguments saved to {train_args_path}")
         
         for epoch in range(self.num_epochs):
             epoch_losses = []
-            os.makedirs(self.save_dir_path, exist_ok=True)
 
             bar = tqdm(total=len(self.train_dl), desc=f"Epoch {epoch}")
             for batch_idx, (inputs, labels) in enumerate(self.train_dl):
                 inputs = inputs.to(self.device)
                 labels = [label.to(self.device) for label in labels]
+                labels = torch.stack(labels, dim=1)
 
                 text_encs = self.preprocess_text(prompts*len(inputs), enc_tok = True, add_text = False)
 
                 outputs = self.model(inputs, text_encs)
-                loss = self.loss_fn(outputs, torch.stack(labels, dim=1))
+                loss = self.loss_fn(outputs, labels)
+                print(loss.shape)
 
                 loss.backward()
 
@@ -99,12 +130,11 @@ class MSSTrainer:
 
                 epoch_losses.append(loss.item())
                 bar.update(1)
-                bar.set_description(f"Epoch {epoch} loss: {sum(epoch_losses) / len(epoch_losses):.5f}")
+                bar.set_description(f"[INFO] Epoch {epoch} loss: {sum(epoch_losses) / len(epoch_losses):.5f}")
 
-
-            if epoch % self.save_checkpoint_epoch == 0:
+            if (epoch+1) % self.save_checkpoint_epoch == 0:
                 torch.save(self.model.state_dict(), os.path.join(self.save_dir_path, f"model-epoch-{epoch}.pt"))
-                print(f"\nEpoch[{epoch}] ended with loss: [{sum(epoch_losses) / len(epoch_losses):.5f}]")
+                print(f"\n[INFO] Epoch[{epoch}] ended with loss: [{sum(epoch_losses) / len(epoch_losses):.5f}]")
                 self.writer.add_scalar("Loss/epoch", sum(epoch_losses) / len(epoch_losses), epoch)
 
         self.writer.close()
@@ -112,26 +142,18 @@ class MSSTrainer:
 if __name__ == "__main__":
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-    def read_config_as_args(config_path):
-        return_dict = {}
-        with open(config_path, "r") as f:
-            yml_config = yaml.load(f, Loader=yaml.FullLoader)
-        for k, v in yml_config.items():
-            return_dict[k] = v
-        return argparse.Namespace(**return_dict)
-
     train_config_path = "configs/train.yml"
-    base_config_path = "configs/base.yml"
+    base_config_path = "configs/base_mss.yml"
 
     train_args = read_config_as_args(train_config_path)
     base_args = read_config_as_args(base_config_path)
     merged_dicts = {**vars(base_args), **vars(train_args)}
     args = argparse.Namespace(**merged_dicts)
 
-    mss_wrapper = MSSWrapper(config="base", use_cuda=True)
+    mss_wrapper = MSSWrapper(config="train", use_cuda=True)
     model, tokenizer = mss_wrapper.model, mss_wrapper.enc_tokenizer
 
-    prompts = [PROMPT_VER1]
+    prompts = [PROMPT_VER2]
 
     trainer = MSSTrainer(model, preprocess_text=mss_wrapper.preprocess_text, prompts=prompts, train_args = args)
     trainer.train()
