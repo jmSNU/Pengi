@@ -12,65 +12,78 @@ import torchaudio
 import torchaudio.transforms as T
 import collections
 import random
-
-def get_latest_checkpoint(model_name):
-        base_path = f"./checkpoint/{model_name}"
-
-        if not os.path.exists(base_path):
-            raise FileNotFoundError(f"No checkpoint directory found for model: {model_name}")
-
-        checkpoint_dirs = sorted(
-            [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))],
-            reverse=True
-        )
-
-        if not checkpoint_dirs:
-            raise FileNotFoundError("No checkpoint directories found.")
-
-        latest_checkpoint_dir = os.path.join(base_path, checkpoint_dirs[0])
-
-        checkpoint_files = sorted(
-            [f for f in os.listdir(latest_checkpoint_dir) if f.startswith("model-epoch-")],
-            key=lambda x: int(x.split("-epoch-")[1].split(".")[0]),
-            reverse=True
-        )
-
-        if not checkpoint_files:
-            raise FileNotFoundError("No checkpoint files found in the latest directory.")
-
-        latest_checkpoint_path = os.path.join(latest_checkpoint_dir, checkpoint_files[0])
-
-        return latest_checkpoint_path
+from utils import *
 
 class MSSWrapper():
     def __init__(self, config, use_cuda=False):
         self.file_path = os.path.realpath(__file__)
-        if config == "base":
-            config_path = 'base_mss.yml'
+        config_path = 'base_mss.yml'
+        if config == "train":
             model_path = 'base.pth'
-        elif config == "demo":
-            config_path = "demo.yml"
+        elif config == "eval":
             model_path = get_latest_checkpoint("Pengi-MSS")
         else:
-            raise ValueError(f"Config type {config} not supported")
+            raise ValueError(f"[ERROR] Config type {config} not supported")
 
-        self.model_path = model_path if config == "demo" else files('checkpoint').joinpath(model_path)
+        self.model_path = model_path if config == "eval" else files('checkpoint').joinpath(model_path)
         self.config_path = files('configs').joinpath(config_path)
         self.use_cuda = use_cuda
-        self.model, self.enc_tokenizer, self.args = self.get_model_and_tokenizer(config_path=self.config_path)
-        self.model.eval()
 
-    def read_config_as_args(self,config_path):
-        return_dict = {}
-        with open(config_path, "r") as f:
-            yml_config = yaml.load(f, Loader=yaml.FullLoader)
-        for k, v in yml_config.items():
-            return_dict[k] = v
-        return argparse.Namespace(**return_dict)
+        # Load model
+        self.model, self.enc_tokenizer, self.args = self.get_model_and_tokenizer(config_path=self.config_path)
+        
+        if config == "train":
+            print("[WARN] The model is in training")
+            self.model.train()
+        else:
+            print("[WARN] The model is in evaluation")
+            self.model.eval()
+
+        # Load model's checkpoint
+
+        try :
+            model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))['model']
+        except:
+            model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))
+
+        audio_encoder_state_dict = OrderedDict()
+        caption_encoder_state_dict = OrderedDict()
+        decoder_state_dict = OrderedDict()
+
+        for k, v in model_state_dict.items():
+            name = k
+            if "decoder" not in name:
+                if "audio_encoder" in k :
+                    name = name[len("audio_encoder") + 1:]
+                    audio_encoder_state_dict[name] = v
+                else:
+                    name = name[len("caption_encoder") + 1:]
+                    caption_encoder_state_dict[name] = v
+            else:
+                name = name[len("decoder")+1:]
+                decoder_state_dict[name] = v
+
+        self.model.audio_encoder.load_state_dict(audio_encoder_state_dict)
+        self.model.caption_encoder.load_state_dict(caption_encoder_state_dict)
+        
+        if not self.model.training :
+            self.model.decoder.load_state_dict(decoder_state_dict)
+            print(f"[WARNING] Checkpoint of Decoder is loaded")
+        
+        print(f"[INFO] Checkpoint Loaded : {self.model_path}")
+        print(f"[INFO] Config path : {self.config_path}")
+
+        for param in self.model.audio_encoder.parameters():
+            param.requires_grad = False
+        for param in self.model.caption_encoder.parameters():
+            param.requires_grad = False
+
+        for param in self.model.decoder.parameters():
+            param.requires_grad = True if self.model.training else False
 
     def get_model_and_tokenizer(self, config_path):
         r"""Load Pengi with args from config file"""
-        args = self.read_config_as_args(config_path)
+        args = read_config_as_args(config_path)
         args.prefix_dim = args.d_proj
         args.total_prefix_length = 2*args.prefix_length
         if not args.use_text_model:
@@ -115,28 +128,6 @@ class MSSWrapper():
             pretrained_audioencoder_path = None,
         )
         model.enc_text_len = args.dataset_config['enc_text_len']
-        # model.dec_text_len = args.dataset_config['dec_text_len']
-        try :
-            model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))['model']
-        except:
-            model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))
-
-        audio_encoder_state_dict = OrderedDict()
-        caption_encoder_state_dict = OrderedDict()
-        for k, v in model_state_dict.items():
-            if "decoder" not in k:
-                name = k
-                if "audio_encoder" in k :
-                    name = name[len("audio_encoder") + 1:]
-                    audio_encoder_state_dict[name] = v
-                else:
-                    name = name[len("caption_encoder") + 1:]
-                    caption_encoder_state_dict[name] = v
-
-        model.audio_encoder.load_state_dict(audio_encoder_state_dict)
-        model.caption_encoder.load_state_dict(caption_encoder_state_dict)
-        for param in model.audio_encoder.parameters():
-            param.requires_grad = False
 
         enc_tokenizer = AutoTokenizer.from_pretrained(args.text_model)
         if 'gpt' in args.text_model:
@@ -191,46 +182,6 @@ class MSSWrapper():
 
         raise TypeError(self.default_collate_err_msg_format.format(elem_type))
 
-    def load_audio_into_tensor(self, audio_path, audio_duration, resample=True):
-        r"""Loads audio file and returns raw audio."""
-        # Randomly sample a segment of audio_duration from the clip or pad to match duration
-        audio_time_series, sample_rate = torchaudio.load(audio_path)
-        resample_rate = self.args.sampling_rate
-        if resample and resample_rate != sample_rate:
-            resampler = T.Resample(sample_rate, resample_rate)
-            audio_time_series = resampler(audio_time_series)
-        audio_time_series = audio_time_series.reshape(-1)
-        sample_rate = resample_rate
-
-        # audio_time_series is shorter than predefined audio duration,
-        # so audio_time_series is extended
-        if audio_duration*sample_rate >= audio_time_series.shape[0]:
-            repeat_factor = int(np.ceil((audio_duration*sample_rate) /
-                                        audio_time_series.shape[0]))
-            # Repeat audio_time_series by repeat_factor to match audio_duration
-            audio_time_series = audio_time_series.repeat(repeat_factor)
-            # remove excess part of audio_time_series
-            audio_time_series = audio_time_series[0:audio_duration*sample_rate]
-        else:
-            # audio_time_series is longer than predefined audio duration,
-            # so audio_time_series is trimmed
-            start_index = random.randrange(
-                audio_time_series.shape[0] - audio_duration*sample_rate)
-            audio_time_series = audio_time_series[start_index:start_index +
-                                                  audio_duration*sample_rate]
-        return torch.FloatTensor(audio_time_series)
-
-    def preprocess_audio(self, audio_files, resample):
-        r"""Load list of audio files and return raw audio"""
-        audio_tensors = []
-        for audio_file in audio_files:
-            audio_tensor = self.load_audio_into_tensor(
-                audio_file, self.args.duration, resample)
-            audio_tensor = audio_tensor.reshape(
-                1, -1).cuda() if self.use_cuda and torch.cuda.is_available() else audio_tensor.reshape(1, -1)
-            audio_tensors.append(audio_tensor)
-        return self.default_collate(audio_tensors)
-
     def preprocess_text(self, prompts, enc_tok, add_text):
         r"""Load list of prompts and return tokenized text"""
         tokenized_texts = []
@@ -251,50 +202,25 @@ class MSSWrapper():
             tokenized_texts.append(tok)
         return self.default_collate(tokenized_texts)
     
-    def _get_audio_embeddings(self, preprocessed_audio):
-        r"""Load preprocessed audio and return a audio embeddings"""
-        with torch.no_grad():
-            preprocessed_audio = preprocessed_audio.reshape(
-                preprocessed_audio.shape[0], preprocessed_audio.shape[2])
-            audio_embeddings = self.model.audio_encoder(preprocessed_audio)[0]
-            if self.args.normalize_prefix:
-                audio_embeddings = audio_embeddings / audio_embeddings.norm(2, -1).reshape(-1,1)
-        return audio_embeddings
-
-    def _get_audio_prefix(self, audio_embeddings):
-        r"""Produces audio embedding which is fed to LM"""
-        with torch.no_grad():
-            audio_prefix = self.model.decoder.audio_project(audio_embeddings).contiguous().view(-1, self.model.decoder.prefix_length, self.model.decoder.input_dim)
-        return audio_prefix
-
-    def _get_prompts_embeddings(self, preprocessed_prompts):
-        r"""Load preprocessed prompts and return a prompt embeddings"""
-        with torch.no_grad():
-            if self.args.use_text_model:
-                prompts_embed = self.model.caption_encoder(preprocessed_prompts)
+    def preprocess_text(self, prompts, enc_tok, add_text):
+        r"""Load list of prompts and return tokenized text"""
+        tokenized_texts = []
+        tokenizer = self.enc_tokenizer if enc_tok else self.dec_tokenizer
+        for ttext in prompts:
+            if add_text:
+                tok = self.dec_tokenizer.encode_plus(text=ttext, add_special_tokens=True, return_tensors="pt")
             else:
-                prompts_embed = self.model.decoder.gpt.transformer.wte(preprocessed_prompts['input_ids'])
-        return prompts_embed
-    
-    def _get_prompts_prefix(self, prompts_embed):
-        r"""Produces prompt prefix which is fed to LM"""
-        with torch.no_grad():
-            prompts_prefix = self.model.decoder.text_project(prompts_embed).contiguous().view(-1, self.model.decoder.prefix_length, self.model.decoder.input_dim)
-        return prompts_prefix
-    
-    def get_audio_embeddings(self, audio_paths, resample=True):
-        r"""Load list of audio files and return audio prefix and audio embeddings"""
-        preprocessed_audio = self.preprocess_audio(audio_paths, resample)
-        audio_embeddings = self._get_audio_embeddings(preprocessed_audio)
-        audio_prefix = self._get_audio_prefix(audio_embeddings)
-        return audio_prefix, audio_embeddings
-
-    def get_prompt_embeddings(self, prompts):
-        r"""Load list of text prompts and return prompt prefix and prompt embeddings"""
-        preprocessed_text = self.preprocess_text(prompts, enc_tok=True, add_text=False)
-        prompt_embeddings = self._get_prompts_embeddings(preprocessed_text)
-        prompt_prefix = self._get_prompts_prefix(prompt_embeddings)
-        return prompt_prefix, prompt_embeddings
+                if enc_tok:
+                    ttext = ttext + ' <|endoftext|>' if 'gpt' in self.args.text_model else ttext
+                tok = tokenizer.encode_plus(
+                            text=ttext, add_special_tokens=True,\
+                            max_length=self.model.enc_text_len, 
+                            pad_to_max_length=True, return_tensors="pt")
+                
+            for key in tok.keys():
+                tok[key] = tok[key].reshape(-1).cuda() if self.use_cuda and torch.cuda.is_available() else tok[key].reshape(-1)
+            tokenized_texts.append(tok)
+        return self.default_collate(tokenized_texts)
     
     def predict(self, audio_paths, text_prompts, audio_resample=True):
         if not isinstance(audio_paths, list):
@@ -308,9 +234,9 @@ class MSSWrapper():
         text_encs = self.preprocess_text(text_prompts, enc_tok=True, add_text=False)
         audio_samples = []
         for audio_path in audio_paths:
-            audio_sample = self.load_audio_into_tensor(audio_path, self.args.duration, audio_resample).cuda() if self.use_cuda else self.load_audio_into_tensor(audio_path, self.args.duration, audio_resample)
+            audio_sample = load_audio_into_tensor(audio_path, self.args.duration, audio_resample).cuda() if self.use_cuda else self.load_audio_into_tensor(audio_path, self.args.duration, audio_resample)
             audio_samples.append(audio_sample)
-        audio_samples_tensor = torch.stack(audio_samples, dim = 0)
+        audio_samples_tensor = torch.stack(audio_samples, dim = 1)
         preds = self.model(audio_samples_tensor, text_encs)
         
         return preds
