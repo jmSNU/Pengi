@@ -184,13 +184,6 @@ class MSS(nn.Module):
         caption_embed = self.caption_encoder(texts_enc)
         out = self.decoder(audio_embed, caption_embed)
         return out
-    
-    def generate_prefix_inference(self, audio, texts_enc):
-        audio_embed, _ = self.audio_encoder(audio)
-        assert self.use_text_encoder
-        caption_embed = self.caption_encoder(texts_enc)
-        prefix = self.decoder.generate_prefix_inference(audio_embed, caption_embed)
-        return prefix
 
 class PENGI(nn.Module):
     def __init__(self,
