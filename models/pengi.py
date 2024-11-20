@@ -175,7 +175,7 @@ class MSS(nn.Module):
             mapping_type=mapping_type,
             use_text_encoder=use_text_encoder, 
             input_dim=embedding_dim, 
-            target_length=duration * sample_rate
+            target_length=duration * sample_rate,
         )
 
     def forward(self, audio, texts_enc):
