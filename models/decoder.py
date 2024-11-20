@@ -204,26 +204,29 @@ class CNNDecoder(nn.Module):
         self.target_length = target_length
 
         self.shared_layers = nn.Sequential(
-            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(input_dim, 512, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(512, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu')
+            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu')
         )
 
          # Separate heads for each output signal
         self.head1 = nn.Sequential(
-            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
         self.head2 = nn.Sequential(
-            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
         self.head3 = nn.Sequential(
-            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
         self.head4 = nn.Sequential(
-            DeConvLayer(64, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
 
