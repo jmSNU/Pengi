@@ -25,7 +25,7 @@ d_proj: 1024
 # DATASET CONFIGS
 dataset_config: 
   sampling_rate: 44100
-  duration: 7
+  duration: 30
   enc_text_len: 40
 
 # DECODER CONFIG

@@ -1,18 +1,18 @@
 model_name : "Pengi-MSS"
 device : "cuda:0"
-num_epochs : 1000
-save_checkpoint_epoch: 100
+num_epochs : 20
+save_checkpoint_epoch: 10
 
 # Datasets Configuration
 dataset_dir : "./dataset"
-batch_size : 64
+batch_size : 32
 
 # Optimizer Configuration
-learning_rate : 0.001
+learning_rate : 0.01
 weight_decay: 0.00001
 
 # Scheduler Configuration
-gradient_clipping : 0.1
+gradient_clipping : 1.0
 warmup_steps_ratio: 0.01
 grad_accum_steps: 1
 
