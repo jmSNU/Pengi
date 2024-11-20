@@ -204,12 +204,11 @@ class CNNDecoder(nn.Module):
         self.target_length = target_length
 
         self.shared_layers = nn.Sequential(
-            DeConvLayer(input_dim, 512, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(512, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu')
+            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
         )
 
          # Separate heads for each output signal
