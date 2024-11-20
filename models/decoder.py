@@ -263,25 +263,6 @@ class CNNDecoderModel(nn.Module):
             else:
                 self.text_project = TransformerMapperSeq(prefix_size, input_dim, prefix_length, clip_length, int(num_layers/2))
         self.cnn_decoder = CNNDecoder(input_dim, prefix_length, target_length)
-
-    def get_dummy_token(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.zeros(batch_size, self.prefix_length, dtype=torch.int64, device=device)
-    
-    def generate_prefix_inference(self, daudio, dtext):
-        # normalize prefix (audio embedding)
-        if self.normalize_prefix:
-            daudio = daudio / daudio.norm(2, -1).reshape(-1,1)
-            if self.use_text_encoder:
-                dtext = dtext / dtext.norm(2, -1).reshape(-1,1)
-
-        audio_projections = self.audio_project(daudio).contiguous().view(-1, self.prefix_length, self.input_dim)
-        if self.use_text_encoder:
-            text_projections = self.text_project(dtext).contiguous().view(-1, self.prefix_length, self.input_dim)
-            embedding_cat = torch.cat((audio_projections, text_projections), dim=1)
-        else:
-            text_projections = self.text_project(dtext).contiguous().view(-1, self.prefix_length, self.input_dim)
-            embedding_cat = torch.cat((audio_projections, text_projections), dim=1)
-        return embedding_cat
     
     def forward(self, daudio: torch.Tensor, dtext: torch.Tensor):
         """
