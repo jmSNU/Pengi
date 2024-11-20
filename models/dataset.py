@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from typing import Optional, Callable, List, Tuple
 import numpy as np
 import random
+from utils import *
 
 class MediaContentDataset(Dataset):
     def __init__(self, csv_file: str, data_dir: str, train: bool, duration : int, transform: Optional[Callable] = None, sample_rate: int = 44100):
@@ -31,37 +32,13 @@ class MediaContentDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, List[torch.Tensor]]:
         # Load the input audio file
         data_path = os.path.join(self.data_dir, self.sample_files.iloc[index, 0])
-        sample, _ = librosa.load(data_path, sr=self.sample_rate, mono=True)
-        sample = torch.tensor(sample, dtype=torch.float32)
-
-        if self.duration*self.sample_rate >= sample.shape[0]:
-            repeat_factor = int(np.ceil(
-                (self.duratino*self.sample_rate)/sample.shape[0]
-            ))
-            sample = sample.repeat(repeat_factor)
-            sample = sample[0:self.duration*self.sample_rate]
-        else:
-            start_idx = random.randrange(
-                sample.shape[0] - self.duration*self.sample_rate
-            )
-            sample = sample[start_idx:start_idx + self.duration*self.sample_rate]
+        sample = load_audio_into_tensor(data_path, self.duration, self.sample_rate, resample=True)
 
         # Load the label audio files
         label_paths = [os.path.join(self.data_dir, self.sample_files.iloc[index, i + 1]) for i in range(4)]
         labels = []
         for path in label_paths:
-            label, _ = librosa.load(path, sr=self.sample_rate, mono=True)
-            label = torch.tensor(label, dtype=torch.float32)
-            
-            if self.duration*self.sample_rate >= label.shape[0]:
-                repeat_factor = int(np.ceil(
-                    (self.duratino*self.sample_rate)/label.shape[0]
-                ))
-                label = label.repeat(repeat_factor)
-                label = label[0:self.duration*self.sample_rate]
-            else:
-                label = label[start_idx:start_idx + self.duration*self.sample_rate]
-
+            label = load_audio_into_tensor(path, self.duration, self.sample_rate, resample=True)
             labels.append(label)
 
         # Apply transform if specified
