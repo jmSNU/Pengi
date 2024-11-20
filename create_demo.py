@@ -8,7 +8,9 @@ def create_demo(audio_names, prompts):
         f"dataset/processed_data/train/{audio_name}" for audio_name in audio_names
     ]
 
-    mss_wrapper = MSSWrapper(config="demo", use_cuda=True)
+    mss_wrapper = MSSWrapper(config="eval", use_cuda=True)
+    model, tokenizer = mss_wrapper.model, mss_wrapper.enc_tokenizer
+    
     sample_rate = mss_wrapper.args.dataset_config["sampling_rate"]
     checkpoint_path = mss_wrapper.model_path
     date = checkpoint_path.split("/")[-2]
@@ -30,7 +32,7 @@ def save_audio(output, audio_names, sample_rate, save_dir):
     sample_rate : Sampling rate of the audio
     save_dir : Directory to save the audio files
     """
-    layer_names = ["vocals","background","speech", "others"]
+    label_names = ["vocals","background","speech", "others"]
     num_audio_ids, num_layers, _ = output.shape
 
     os.makedirs(save_dir, exist_ok=True)
@@ -42,7 +44,7 @@ def save_audio(output, audio_names, sample_rate, save_dir):
 
         for layer_idx in range(num_layers):
             audio_data = output[i, layer_idx].cpu().detach().numpy()
-            file_path = os.path.join(audio_dir, f"{layer_names[layer_idx]}.wav")
+            file_path = os.path.join(audio_dir, f"{label_names[layer_idx]}.wav")
 
             sf.write(file_path, audio_data, samplerate=sample_rate)
             print(f"Saved: {file_path}")
