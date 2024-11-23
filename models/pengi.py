@@ -62,7 +62,6 @@ class AudioEncoder(nn.Module):
         super().__init__()
 
         audio_encoder, pretrained_emb_size = get_audio_encoder(audioenc_name)
-
         if use_pretrained_audioencoder:
             classes_num = 527
             d_in = pretrained_emb_size
@@ -183,6 +182,7 @@ class MSS(nn.Module):
         assert self.use_text_encoder
         caption_embed = self.caption_encoder(texts_enc)
         out = self.decoder(audio_embed, caption_embed)
+
         return out
 
 class PENGI(nn.Module):
