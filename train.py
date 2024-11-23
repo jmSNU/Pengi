@@ -13,30 +13,8 @@ from prompts import *
 from datetime import datetime
 from utils import *
 from torch.utils.tensorboard import SummaryWriter
-from torchlibrosa.stft import Spectrogram
-
-
-class SpectralL1Loss(nn.Module):
-    def __init__(self, n_fft = 512, hop_size = 256, win_size = 512):
-        super().__init__()
-        self.n_fft = n_fft
-        self.hop_length = hop_size
-        self.win_length = win_size
-        self.spectrogram_extractor = Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, 
-            win_length=self.win_length, window="hann", center=True, pad_mode="reflect", 
-            freeze_parameters=True).to(train_args.device)
-        
-        self.l1_loss = nn.L1Loss()
-
-    def forward(self, predicted, target):
-        loss = 0
-
-        for stem in range(4):
-            pred_spectrogram = self.spectrogram_extractor(predicted[:, stem, :])
-            target_spectrogram = self.spectrogram_extractor(target[:, stem, :])
-
-            loss += self.l1_loss(pred_spectrogram, target_spectrogram)
-        return loss/4
+import auraloss
+from torchsummary import summary
 
 class MSSTrainer:
     def __init__(self, model, preprocess_text, prompts, train_args):
@@ -60,7 +38,7 @@ class MSSTrainer:
         self.writer = SummaryWriter(log_dir=self.save_dir_path)
 
         self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+            self.model.decoder.parameters(),
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
@@ -87,7 +65,18 @@ class MSSTrainer:
             num_training_steps=total_training_steps,
         )
 
-        self.loss_fn = SpectralL1Loss(train_args.n_fft, train_args.hop_size, train_args.window_size)
+        self.loss_fn = auraloss.freq.MultiResolutionSTFTLoss(
+            fft_sizes=[1024, 2048, 8192],
+            hop_sizes=[256, 512, 2048],
+            win_lengths=[1024, 2048, 8192],
+            scale="mel",
+            n_bins=128,
+            sample_rate=train_args.dataset_config["sampling_rate"],
+            perceptual_weighting=True,
+        )
+        # self.loss_fn = auraloss.time.SDSDRLoss()
+        print(f"[INFO] Number of Trainable Parameters : {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
+        print(f"[INFO] Number of Nontrainable Parameters : {sum(p.numel() for p in self.model.parameters() if not p.requires_grad)}")
 
     def train(self):
         self.model.train()
@@ -113,8 +102,7 @@ class MSSTrainer:
                 text_encs = self.preprocess_text(prompts*len(inputs), enc_tok = True, add_text = False)
 
                 outputs = self.model(inputs, text_encs)
-                loss = self.loss_fn(outputs, labels)
-                print(loss.shape)
+                loss = self.loss_fn(outputs.reshape(self.batch_size*4, 1, -1), labels.reshape(self.batch_size*4, 1, -1))
 
                 loss.backward()
 
