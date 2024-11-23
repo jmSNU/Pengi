@@ -190,6 +190,7 @@ class DeConvLayer(nn.Module):
             self.activation = nn.Sigmoid()
         else:
             raise ValueError(f"Unsupported activation function: {activation}")
+            
 
     def forward(self, x: torch.Tensor):
         x = self.deconv(x)
@@ -242,7 +243,6 @@ class CNNDecoder(nn.Module):
         outputs = torch.cat([output1, output2, output3, output4], dim=1)
         return outputs  # (batch_size, 4, target_length)
 
-    
 class CNNDecoderModel(nn.Module):
     def __init__(self, prefix_length: int, prefix_size: int = 512, clip_length: Optional[int] = None,
                  num_layers: int = 8, normalize_prefix: bool = True, mapping_type: str = None,
@@ -275,7 +275,6 @@ class CNNDecoderModel(nn.Module):
             daudio = daudio / daudio.norm(2, -1).reshape(-1, 1)
             if self.use_text_encoder:
                 dtext = dtext / dtext.norm(2, -1).reshape(-1, 1)
-
         audio_projections = self.audio_project(daudio).contiguous().view(-1, self.prefix_length, self.input_dim)
         if self.use_text_encoder:
             text_projections = self.text_project(dtext).contiguous().view(-1, self.prefix_length, self.input_dim)
@@ -284,10 +283,7 @@ class CNNDecoderModel(nn.Module):
             latent = audio_projections
 
         decoded_output = self.cnn_decoder(latent.permute(0, 2, 1))  # (batch_size, input_dim, latent_length)
-
         return decoded_output  # (batch_size, 4, target_length)
-        
-
 
 class DecoderModel(nn.Module):
     def __init__(self, text_decoder: str, prefix_length: int, clip_length: Optional[int] = None, prefix_size: int = 512,
