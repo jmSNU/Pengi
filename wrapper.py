@@ -15,7 +15,7 @@ import random
 from utils import *
 
 class MSSWrapper():
-    def __init__(self, config, use_cuda=False):
+    def __init__(self, config, use_cuda=False, debug = False):
         self.file_path = os.path.realpath(__file__)
         config_path = 'base_mss.yml'
         if config == "train":
@@ -40,36 +40,51 @@ class MSSWrapper():
             self.model.eval()
 
         # Load model's checkpoint
-
         try :
             model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))['model']
         except:
             model_state_dict = torch.load(self.model_path, map_location=torch.device('cpu'))
 
+        # print([name for name, _ in model_state_dict.items()])
+        
         audio_encoder_state_dict = OrderedDict()
         caption_encoder_state_dict = OrderedDict()
+        audio_projection_state_dict = OrderedDict()
+        text_projection_state_dict = OrderedDict()
         decoder_state_dict = OrderedDict()
 
         for k, v in model_state_dict.items():
             name = k
-            if "decoder" not in name:
-                if "audio_encoder" in k :
-                    name = name[len("audio_encoder") + 1:]
-                    audio_encoder_state_dict[name] = v
-                else:
-                    name = name[len("caption_encoder") + 1:]
-                    caption_encoder_state_dict[name] = v
+            if "audio_encoder" in name:
+                name = name[len("audio_encoder") + 1:]
+                audio_encoder_state_dict[name] = v
+            elif "caption_encoder" in name:
+                name = name[len("caption_encoder") + 1:]
+                caption_encoder_state_dict[name] = v
             else:
-                name = name[len("decoder")+1:]
-                decoder_state_dict[name] = v
+                name = name[len("caption_decoder")+1:]
+                if "audio_project" in name:
+                    name = name[len("audio_project")+1:]
+                    audio_projection_state_dict[name] = v
+                elif "text_project" in name:
+                    name = name[len("text_project")+1:]
+                    text_projection_state_dict[name] = v
+                else:
+                    decoder_state_dict[name] = v
 
         self.model.audio_encoder.load_state_dict(audio_encoder_state_dict)
         self.model.caption_encoder.load_state_dict(caption_encoder_state_dict)
+        self.model.decoder.audio_project.load_state_dict(audio_projection_state_dict)
+        self.model.decoder.audio_project.load_state_dict(text_projection_state_dict)
         
         if not self.model.training :
             self.model.decoder.load_state_dict(decoder_state_dict)
             print(f"[WARNING] Checkpoint of Decoder is loaded")
         
+        if debug : 
+            print(f"[DEBUG] Audio encoder : {[name for name, _ in self.model.audio_encoder.named_parameters()]}")
+            print(f"[DEBUG] Caption encoder : {[name for name, _ in self.model.caption_encoder.named_parameters()]}")
+            print(f"[DEBUG] Decoder : {[name for name, _ in self.model.decoder.named_parameters()]}")
         print(f"[INFO] Checkpoint Loaded : {self.model_path}")
         print(f"[INFO] Config path : {self.config_path}")
 
@@ -77,9 +92,19 @@ class MSSWrapper():
             param.requires_grad = False
         for param in self.model.caption_encoder.parameters():
             param.requires_grad = False
-
-        for param in self.model.decoder.parameters():
+        for param in self.model.decoder.audio_project.parameters():
+            param.requires_grad = False
+        for param in self.model.decoder.text_project.parameters():
+            param.requires_grad = False
+        for param in self.model.decoder.cnn_decoder.parameters():
             param.requires_grad = True if self.model.training else False
+
+        if debug:
+            print("Trainable Parameter for each components")
+            print(f"\tAudio Encoder : {sum(p.numel() for p in self.model.audio_encoder.parameters() if p.requires_grad)}")
+            print(f"\tCaption Encoder : {sum(p.numel() for p in self.model.caption_encoder.parameters() if p.requires_grad)}")
+            print(f"\tDecoder : {sum(p.numel() for p in self.model.decoder.parameters() if p.requires_grad)}")
+            print(f"\tCNN layers : {sum(p.numel() for p in self.model.decoder.cnn_decoder.parameters() if p.requires_grad)}")
 
     def get_model_and_tokenizer(self, config_path):
         r"""Load Pengi with args from config file"""
