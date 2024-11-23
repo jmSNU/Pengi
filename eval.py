@@ -10,29 +10,36 @@ from tqdm import tqdm
 from prompts import *
 from utils import *
 import matplotlib.pyplot as plt
-from torchlibrosa.stft import Spectrogram
+import auraloss
 
 
-class SpectralL1Loss(nn.Module):
-    def __init__(self, n_fft = 512, hop_size = 256, win_size = 512):
-        super().__init__()
-        self.n_fft = n_fft
-        self.hop_length = hop_size
-        self.win_length = win_size
-        self.spectrogram_extractor = Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, 
-            win_length=self.win_length, window="hann", center=True, pad_mode="reflect", 
-            freeze_parameters=True).to(train_args.device)
-        
-        self.l1_loss = nn.L1Loss()
+def visualize_spectrograms(pred_spectrogram, target_spectrogram, stem_index, save_path="spectrogram_comparison.png"):
+    # Convert tensors to numpy arrays if they are still in torch format
+    if hasattr(pred_spectrogram, "detach"):
+        pred_spectrogram = pred_spectrogram.detach().cpu().numpy()
+    if hasattr(target_spectrogram, "detach"):
+        target_spectrogram = target_spectrogram.detach().cpu().numpy()
 
-    def forward(self, predicted, target):
-        loss = 0
-        for stem in range(4):
-            pred_spectrogram = self.spectrogram_extractor(predicted[:, stem, :])
-            target_spectrogram = self.spectrogram_extractor(target[:, stem, :])
+    # Create a figure with subplots
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    fig.suptitle(f"Spectrogram Comparison for Stem {stem_index}", fontsize=16)
 
-            loss += self.l1_loss(pred_spectrogram, target_spectrogram)
-        return loss/4
+    # Plot predicted spectrogram
+    ax = axes[0]
+    img_pred = ax.imshow(pred_spectrogram, aspect='auto', origin='lower', cmap='viridis')
+    ax.set_title("Predicted Spectrogram")
+    fig.colorbar(img_pred, ax=ax, orientation='vertical')
+    
+    # Plot target spectrogram
+    ax = axes[1]
+    img_target = ax.imshow(target_spectrogram, aspect='auto', origin='lower', cmap='viridis')
+    ax.set_title("Target Spectrogram")
+    fig.colorbar(img_target, ax=ax, orientation='vertical')
+
+    # Save the figure
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig(save_path)
+    plt.close(fig)
 
 class MSSEvaluator:
     def __init__(self, model, preprocess_text, prompts, eval_args):
@@ -59,8 +66,15 @@ class MSSEvaluator:
             shuffle=False,
         )
 
-        self.loss_fn = SpectralL1Loss(eval_args.n_fft, eval_args.hop_size, eval_args.window_size)
-
+        self.loss_fn = auraloss.freq.MultiResolutionSTFTLoss(
+            fft_sizes=[1024, 2048, 8192],
+            hop_sizes=[256, 512, 2048],
+            win_lengths=[1024, 2048, 8192],
+            scale="mel",
+            n_bins=128,
+            sample_rate=eval_args.dataset_config["sampling_rate"],
+            perceptual_weighting=True,
+        )
 
     def evaluate(self):
         self.model.eval()
@@ -100,9 +114,9 @@ if __name__ == "__main__":
     eval_config_path = "configs/demo.yml"
     base_config_path = "configs/base_mss.yml"
 
-    train_args = read_config_as_args(eval_config_path)
+    eval_config = read_config_as_args(eval_config_path)
     base_args = read_config_as_args(base_config_path)
-    merged_dicts = {**vars(base_args), **vars(train_args)}
+    merged_dicts = {**vars(base_args), **vars(eval_config)}
     args = argparse.Namespace(**merged_dicts)
 
     mss_wrapper = MSSWrapper(config="eval", use_cuda=True)
