@@ -12,3 +12,4 @@ transformers==4.28.1
 # MSS
 pandas
 tensorboard
+auraloss
