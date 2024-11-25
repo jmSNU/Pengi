@@ -10,15 +10,6 @@ from utils import *
 
 class MediaContentDataset(Dataset):
     def __init__(self, csv_file: str, data_dir: str, train: bool, duration : int, transform: Optional[Callable] = None, sample_rate: int = 44100):
-        """
-        Args:
-            csv_file (str): Path to the CSV file containing the dataset information.
-            data_dir (str): Directory with all the .wav files.
-            train (bool): Flag to indicate if it's training mode.
-            duration(int) : How long the train audio is
-            transform (Optional[Callable]): Optional transform to be applied on a sample.
-            sample_rate (int): Sample rate for loading the audio files (default: 44100).
-        """
         self.sample_files = pd.read_csv(csv_file)
         self.data_dir = data_dir
         self.is_train = train
