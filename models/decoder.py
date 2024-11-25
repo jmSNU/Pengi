@@ -1,11 +1,9 @@
-
 import torch
 import torch.nn as nn
 from torch.nn import functional as nnf
-from torch.utils.data import Dataset, DataLoader
 from enum import Enum
 from transformers import GPT2LMHeadModel
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional
 
 def get_decoder(name: str):
     if name == "Decoder":
@@ -204,28 +202,48 @@ class CNNDecoder(nn.Module):
         self.latent_length = latent_length
         self.target_length = target_length
 
-        self.shared_layers = nn.Sequential(
+        # self.shared_layers = nn.Sequential(
+        #     DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
+        #     DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
+        #     DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
+        #     DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
+        #     DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
+        # )
+
+         # Separate heads for each output signal
+        self.head1 = nn.Sequential(
             DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
-        )
-
-         # Separate heads for each output signal
-        self.head1 = nn.Sequential(
             DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
         self.head2 = nn.Sequential(
+            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
         self.head3 = nn.Sequential(
+            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
         self.head4 = nn.Sequential(
+            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
+            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
             nn.AdaptiveAvgPool1d(target_length)
         )
@@ -234,7 +252,7 @@ class CNNDecoder(nn.Module):
         """
         x: (batch_size, input_dim, latent_length)
         """
-        x = self.shared_layers(x)
+        # x = self.shared_layers(x)
         output1 = self.head1(x)
         output2 = self.head2(x)
         output3 = self.head3(x)
