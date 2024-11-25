@@ -14,7 +14,7 @@ from datetime import datetime
 from utils import *
 from torch.utils.tensorboard import SummaryWriter
 import auraloss
-from torchsummary import summary
+
 
 class MSSTrainer:
     def __init__(self, model, preprocess_text, prompts, train_args):
@@ -38,12 +38,12 @@ class MSSTrainer:
         self.writer = SummaryWriter(log_dir=self.save_dir_path)
 
         self.optimizer = torch.optim.AdamW(
-            self.model.decoder.parameters(),
-            lr=self.learning_rate,
-            weight_decay=self.weight_decay,
-        )
+                self.model.parameters(),
+                lr=self.learning_rate,
+                weight_decay=self.weight_decay,
+            )
 
-        csv_file_path = os.path.join(self.data_dir, "processed_data", "train.csv")
+        csv_file_path = os.path.join(self.data_dir, "processed_data_0.3", "train.csv")
         self.dataset = MediaContentDataset(
             csv_file=csv_file_path,
             data_dir=self.data_dir,
@@ -65,7 +65,8 @@ class MSSTrainer:
             num_training_steps=total_training_steps,
         )
 
-        self.loss_fn = auraloss.freq.MultiResolutionSTFTLoss(
+        self.sisdr_loss = auraloss.time.SISDRLoss()
+        self.mrstft_loss = auraloss.freq.MultiResolutionSTFTLoss(
             fft_sizes=[1024, 2048, 8192],
             hop_sizes=[256, 512, 2048],
             win_lengths=[1024, 2048, 8192],
@@ -74,7 +75,10 @@ class MSSTrainer:
             sample_rate=train_args.dataset_config["sampling_rate"],
             perceptual_weighting=True,
         )
-        # self.loss_fn = auraloss.time.SDSDRLoss()
+
+        self.sisdr_weight = 0.7
+        self.mrstft_weight = 0.3
+
         print(f"[INFO] Number of Trainable Parameters : {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
         print(f"[INFO] Number of Nontrainable Parameters : {sum(p.numel() for p in self.model.parameters() if not p.requires_grad)}")
 
@@ -90,7 +94,7 @@ class MSSTrainer:
             yaml.dump(vars(train_args), f)
         print(f"[INFO] Training arguments saved to {train_args_path}")
         
-        for epoch in range(self.num_epochs):
+        for epoch in range(1,self.num_epochs+1):
             epoch_losses = []
 
             bar = tqdm(total=len(self.train_dl), desc=f"Epoch {epoch}")
@@ -102,25 +106,47 @@ class MSSTrainer:
                 text_encs = self.preprocess_text(prompts*len(inputs), enc_tok = True, add_text = False)
 
                 outputs = self.model(inputs, text_encs)
-                loss = self.loss_fn(outputs.reshape(self.batch_size*4, 1, -1), labels.reshape(self.batch_size*4, 1, -1))
+                
+                total_loss = 0.0
+                total_sisdr_loss = 0.0 
+                total_mrstft_loss = 0.0
 
+                for stem in range(4):
+                    sisdr_loss = self.sisdr_loss(outputs[:, stem, :].unsqueeze(1), labels[:, stem, :].unsqueeze(1))
+                    mrstft_loss = self.mrstft_loss(outputs[:, stem, :].unsqueeze(1), labels[:, stem, :].unsqueeze(1))
+                    
+                    combined_loss = self.sisdr_weight * sisdr_loss + self.mrstft_weight * mrstft_loss
+                    total_loss += combined_loss
+                    total_sisdr_loss += sisdr_loss.item()
+                    total_mrstft_loss += mrstft_loss.item()
+                
+                total_loss /= 4
+                total_sisdr_loss /= 4
+                total_mrstft_loss /= 4
+
+                loss = total_loss.clone()
+                loss /= self.grad_accum_steps
                 loss.backward()
 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clipping)
+                if (batch_idx + 1)%self.grad_accum_steps == 0 or (batch_idx + 1) == len(self.train_dl):
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clipping)
 
-                self.optimizer.step()
-                self.scheduler.step()
-                self.optimizer.zero_grad()
+                    self.optimizer.step()
+                    self.scheduler.step()
+                    self.optimizer.zero_grad()
 
-                self.writer.add_scalar("Loss/train", loss.item(), global_step)
-                epoch_losses.append(loss.item())
+                self.writer.add_scalar("Loss/SI-SDR", total_sisdr_loss, global_step)
+                self.writer.add_scalar("Loss/MR-STFT", total_mrstft_loss, global_step)
+                self.writer.add_scalar("Loss/train", total_loss.item(), global_step)
+
+                epoch_losses.append(total_loss.item())
                 global_step += 1
 
-                epoch_losses.append(loss.item())
+                epoch_losses.append(total_loss.item())
                 bar.update(1)
                 bar.set_description(f"[INFO] Epoch {epoch} loss: {sum(epoch_losses) / len(epoch_losses):.5f}")
 
-            if (epoch+1) % self.save_checkpoint_epoch == 0:
+            if epoch % self.save_checkpoint_epoch == 0:
                 torch.save(self.model.state_dict(), os.path.join(self.save_dir_path, f"model-epoch-{epoch}.pt"))
                 print(f"\n[INFO] Epoch[{epoch}] ended with loss: [{sum(epoch_losses) / len(epoch_losses):.5f}]")
                 self.writer.add_scalar("Loss/epoch", sum(epoch_losses) / len(epoch_losses), epoch)
@@ -141,7 +167,7 @@ if __name__ == "__main__":
     mss_wrapper = MSSWrapper(config="train", use_cuda=True)
     model, tokenizer = mss_wrapper.model, mss_wrapper.enc_tokenizer
 
-    prompts = [PROMPT_VER2]
+    prompts = [PROMPT_VER1]
 
     trainer = MSSTrainer(model, preprocess_text=mss_wrapper.preprocess_text, prompts=prompts, train_args = args)
     trainer.train()
