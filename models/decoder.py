@@ -202,49 +202,14 @@ class CNNDecoder(nn.Module):
         self.latent_length = latent_length
         self.target_length = target_length
 
-        # self.shared_layers = nn.Sequential(
-        #     DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
-        #     DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
-        #     DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
-        #     DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
-        #     DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
-        # )
-
          # Separate heads for each output signal
-        self.head1 = nn.Sequential(
+        self.head = nn.Sequential(
             DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
             DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
-            nn.AdaptiveAvgPool1d(target_length)
-        )
-        self.head2 = nn.Sequential(
-            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
-            nn.AdaptiveAvgPool1d(target_length)
-        )
-        self.head3 = nn.Sequential(
-            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
-            nn.AdaptiveAvgPool1d(target_length)
-        )
-        self.head4 = nn.Sequential(
-            DeConvLayer(input_dim, 256, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(256, 128, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(128, 64, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(64, 32, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(32, 16, kernel_size=4, stride=2, padding=1, activation='relu'),
-            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='tanh'),
+            DeConvLayer(16, 1, kernel_size=4, stride=2, padding=1, activation='sigmoid'),
             nn.AdaptiveAvgPool1d(target_length)
         )
 
@@ -252,15 +217,8 @@ class CNNDecoder(nn.Module):
         """
         x: (batch_size, input_dim, latent_length)
         """
-        # x = self.shared_layers(x)
-        output1 = self.head1(x)
-        output2 = self.head2(x)
-        output3 = self.head3(x)
-        output4 = self.head4(x)
-
-        outputs = torch.cat([output1, output2, output3, output4], dim=1)
-        return outputs  # (batch_size, 4, target_length)
-
+        return self.head(x)
+    
 class CNNDecoderModel(nn.Module):
     def __init__(self, prefix_length: int, prefix_size: int = 512, clip_length: Optional[int] = None,
                  num_layers: int = 8, normalize_prefix: bool = True, mapping_type: str = None,
@@ -282,7 +240,10 @@ class CNNDecoderModel(nn.Module):
                 self.text_project = TransformerMapper(prefix_size, input_dim, prefix_length, clip_length, int(num_layers/2))
             else:
                 self.text_project = TransformerMapperSeq(prefix_size, input_dim, prefix_length, clip_length, int(num_layers/2))
-        self.cnn_decoder = CNNDecoder(input_dim, prefix_length, target_length)
+
+        self.cnn_decoder = nn.ModuleList([
+            CNNDecoder(input_dim, prefix_length, target_length) for _ in range(4)
+        ])
     
     def forward(self, daudio: torch.Tensor, dtext: torch.Tensor):
         """
@@ -299,9 +260,8 @@ class CNNDecoderModel(nn.Module):
             latent = torch.cat((audio_projections, text_projections), dim=1)
         else:
             latent = audio_projections
-
-        decoded_output = self.cnn_decoder(latent.permute(0, 2, 1))  # (batch_size, input_dim, latent_length)
-        return decoded_output  # (batch_size, 4, target_length)
+        decoded_output = torch.cat([decoder(latent.permute(0,2,1)) for decoder in self.cnn_decoder], dim = 1) # latent : (batch_size, input_dim, latent_length)
+        return decoded_output.permute(1,0,2)  # (4, batch_size, target_length)
 
 class DecoderModel(nn.Module):
     def __init__(self, text_decoder: str, prefix_length: int, clip_length: Optional[int] = None, prefix_size: int = 512,
