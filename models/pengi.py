@@ -62,6 +62,7 @@ class AudioEncoder(nn.Module):
         super().__init__()
 
         audio_encoder, pretrained_emb_size = get_audio_encoder(audioenc_name)
+
         if use_pretrained_audioencoder:
             classes_num = 527
             d_in = pretrained_emb_size
@@ -181,10 +182,14 @@ class MSS(nn.Module):
         audio_embed, _ = self.audio_encoder(audio)
         assert self.use_text_encoder
         caption_embed = self.caption_encoder(texts_enc)
-        out = self.decoder(audio_embed, caption_embed)
 
-        return out
+        masks = self.decoder(audio_embed, caption_embed)
+        predicted = []
 
+        for mask in masks:
+            predicted.append(mask*audio)
+        predicted = torch.stack(predicted, dim = 1) 
+        return predicted
 class PENGI(nn.Module):
     def __init__(self,
                 # audio
