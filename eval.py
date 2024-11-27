@@ -96,7 +96,7 @@ class MSSEvaluator:
             shuffle=False,
         )
 
-        self.sisdr_loss = auraloss.time.SISDRLoss()
+        # self.sisdr_loss = auraloss.time.SISDRLoss()
         self.mrstft_loss = auraloss.freq.MultiResolutionSTFTLoss(
             fft_sizes=[1024, 2048, 8192],
             hop_sizes=[256, 512, 2048],
@@ -107,8 +107,8 @@ class MSSEvaluator:
             perceptual_weighting=True,
         )
 
-        self.sisdr_weight = 0.7
-        self.mrstft_weight = 0.3
+        # self.sisdr_weight = 0.7
+        self.mrstft_weight = 1.0
 
     def evaluate(self):
         self.model.eval()
@@ -129,11 +129,12 @@ class MSSEvaluator:
                 
                 total_loss = 0.0
                 for stem in range(4):
-                    sisdr_loss = self.sisdr_loss(outputs[:, stem, :].unsqueeze(1), labels[:, stem, :].unsqueeze(1))
+                    # sisdr_loss = self.sisdr_loss(outputs[:, stem, :].unsqueeze(1), labels[:, stem, :].unsqueeze(1))
                     mrstft_loss = self.mrstft_loss(outputs[:, stem, :].unsqueeze(1), labels[:, stem, :].unsqueeze(1))
                     
-                    combined_loss = self.sisdr_weight * sisdr_loss + self.mrstft_weight * mrstft_loss
-                    total_loss += combined_loss
+                    # combined_loss = self.sisdr_weight * sisdr_loss + self.mrstft_weight * mrstft_loss
+                    # total_loss += combined_loss
+                    total_loss += mrstft_loss
                 
                 total_loss /= 4
                 eval_losses.append(total_loss.item())
